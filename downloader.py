@@ -9,7 +9,7 @@ import sys
 import time
 import argparse
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, unquote
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Set
 
@@ -262,13 +262,17 @@ class NginxDirectoryDownloader:
         # Add files in current directory
         for file in files:
             file_url = urljoin(url + '/', file)
-            local_file_path = os.path.join(relative_path, file)
+            # Decode URL-encoded filenames for local storage
+            decoded_file = unquote(file)
+            local_file_path = os.path.join(relative_path, decoded_file)
             files_to_download.append((file_url, local_file_path))
         
         # Recursively scan subdirectories
         for directory in directories:
             subdir_url = urljoin(url + '/', directory + '/')
-            subdir_relative_path = os.path.join(relative_path, directory)
+            # Decode URL-encoded directory names for local storage
+            decoded_directory = unquote(directory)
+            subdir_relative_path = os.path.join(relative_path, decoded_directory)
             subdir_files = self.get_all_files_recursive(subdir_url, subdir_relative_path)
             files_to_download.extend(subdir_files)
         
@@ -309,8 +313,8 @@ class NginxDirectoryDownloader:
                 print(f"Max workers: {self.max_workers}")
                 print("-" * 50)
                 
-                # Extract filename from URL
-                filename = self.base_url.split('/')[-1]
+                # Extract filename from URL and decode URL encoding
+                filename = unquote(self.base_url.split('/')[-1])
                 if not filename or '.' not in filename:
                     filename = "downloaded_file"
                 
@@ -343,8 +347,8 @@ class NginxDirectoryDownloader:
                 print(f"Max workers: {self.max_workers}")
                 print("-" * 50)
                 
-                # Extract filename from URL
-                filename = target_folder.split('/')[-1]
+                # Extract filename from URL and decode URL encoding
+                filename = unquote(target_folder.split('/')[-1])
                 if not filename:
                     filename = "downloaded_file"
                 
