@@ -18,10 +18,11 @@ from bs4 import BeautifulSoup
 
 
 class NginxDirectoryDownloader:
-    def __init__(self, base_url: str, output_dir: str = "downloads", max_workers: int = 8):
+    def __init__(self, base_url: str, output_dir: str = "downloads", max_workers: int = 8, max_retries: int = 5):
         self.base_url = base_url.rstrip('/')
         self.output_dir = Path(output_dir)
         self.max_workers = max_workers
+        self.max_retries = max_retries
         self.session = requests.Session()
         self.downloaded_files = set()
         self.failed_downloads = []
@@ -60,65 +61,74 @@ class NginxDirectoryDownloader:
             return [], []
     
     def download_file(self, file_url: str, local_path: Path) -> bool:
-        """Download a single file with resume support"""
-        try:
-            # Create parent directories if they don't exist
-            local_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Check if file exists and get its size
-            existing_size = 0
-            if local_path.exists():
-                existing_size = local_path.stat().st_size
+        """Download a single file with resume support and retry mechanism"""
+        for attempt in range(self.max_retries):
+            try:
+                # Create parent directories if they don't exist
+                local_path.parent.mkdir(parents=True, exist_ok=True)
                 
-                # Get remote file size to check if download is complete
-                try:
-                    head_response = self.session.head(file_url, timeout=10)
-                    remote_size = int(head_response.headers.get('content-length', 0))
-                    
-                    if existing_size == remote_size and remote_size > 0:
-                        print(f"✓ Skipped (complete): {local_path}")
-                        return True
-                    elif existing_size > 0:
-                        print(f"⟳ Resuming: {local_path} (from {existing_size} bytes)")
-                except:
-                    # If HEAD request fails, check if server supports range requests
-                    pass
-            
-            # Set up headers for resume if partial file exists
-            headers = {}
-            if existing_size > 0:
-                headers['Range'] = f'bytes={existing_size}-'
-            
-            response = self.session.get(file_url, headers=headers, timeout=30, stream=True)
-            
-            # Handle partial content (206) or full content (200)
-            if response.status_code == 206:
-                # Resuming download
-                mode = 'ab'
-            elif response.status_code == 200:
-                # Full download (server doesn't support resume or file is new)
-                mode = 'wb'
+                # Check if file exists and get its size
                 existing_size = 0
-            else:
-                response.raise_for_status()
-                mode = 'wb'
-            
-            with open(local_path, mode) as f:
-                downloaded = existing_size
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-                    downloaded += len(chunk)
-            
-            if existing_size > 0:
-                print(f"✓ Resumed: {local_path}")
-            else:
-                print(f"✓ Downloaded: {local_path}")
-            return True
-            
-        except Exception as e:
-            print(f"✗ Failed to download {file_url}: {e}")
-            self.failed_downloads.append(file_url)
-            return False
+                if local_path.exists():
+                    existing_size = local_path.stat().st_size
+                    
+                    # Get remote file size to check if download is complete
+                    try:
+                        head_response = self.session.head(file_url, timeout=10)
+                        remote_size = int(head_response.headers.get('content-length', 0))
+                        
+                        if existing_size == remote_size and remote_size > 0:
+                            print(f"✓ Skipped (complete): {local_path}")
+                            return True
+                        elif existing_size > 0:
+                            print(f"⟳ Resuming: {local_path} (from {existing_size} bytes)")
+                    except:
+                        # If HEAD request fails, check if server supports range requests
+                        pass
+                
+                # Set up headers for resume if partial file exists
+                headers = {}
+                if existing_size > 0:
+                    headers['Range'] = f'bytes={existing_size}-'
+                
+                response = self.session.get(file_url, headers=headers, timeout=30, stream=True)
+                
+                # Handle partial content (206) or full content (200)
+                if response.status_code == 206:
+                    # Resuming download
+                    mode = 'ab'
+                elif response.status_code == 200:
+                    # Full download (server doesn't support resume or file is new)
+                    mode = 'wb'
+                    existing_size = 0
+                else:
+                    response.raise_for_status()
+                    mode = 'wb'
+                
+                with open(local_path, mode) as f:
+                    downloaded = existing_size
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                
+                if existing_size > 0:
+                    print(f"✓ Resumed: {local_path}")
+                else:
+                    print(f"✓ Downloaded: {local_path}")
+                return True
+                
+            except Exception as e:
+                if attempt < self.max_retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s, 8s, 16s
+                    print(f"⚠ Attempt {attempt + 1}/{self.max_retries} failed for {local_path}: {e}")
+                    print(f"  Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"✗ Failed to download {file_url} after {self.max_retries} attempts: {e}")
+                    self.failed_downloads.append(file_url)
+                    return False
+        
+        return False
     
     def get_all_files_recursive(self, url: str, relative_path: str = "") -> List[tuple[str, str]]:
         """Recursively get all files from directory and subdirectories"""
@@ -210,6 +220,7 @@ def main():
     parser.add_argument("-f", "--folder", default="", help="Target folder to download (relative to base URL)")
     parser.add_argument("-o", "--output", default="downloads", help="Output directory (default: downloads)")
     parser.add_argument("-t", "--threads", type=int, default=8, help="Number of download threads (default: 8)")
+    parser.add_argument("-r", "--retries", type=int, default=5, help="Maximum retry attempts per file (default: 5)")
     
     args = parser.parse_args()
     
@@ -223,7 +234,8 @@ def main():
         downloader = NginxDirectoryDownloader(
             base_url=args.url,
             output_dir=args.output,
-            max_workers=args.threads
+            max_workers=args.threads,
+            max_retries=args.retries
         )
         
         downloader.download_all(args.folder)
