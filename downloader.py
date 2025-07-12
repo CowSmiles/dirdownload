@@ -374,10 +374,28 @@ class NginxDirectoryDownloader:
         if target_folder and not start_url.endswith('/'):
             start_url += '/'
         
-        print(f"Starting download from: {start_url}")
-        print(f"Output directory: {self.output_dir.absolute()}")
-        print(f"Max workers: {self.max_workers}")
-        print("-" * 50)
+        # Extract folder name from URL for creating subdirectory
+        if not target_folder:
+            # Get folder name from base URL
+            folder_name = unquote(self.base_url.rstrip('/').split('/')[-1])
+        else:
+            # Get folder name from target_folder
+            folder_name = unquote(target_folder.rstrip('/').split('/')[-1])
+        
+        # Create subdirectory in output folder
+        if folder_name and folder_name != '.':
+            final_output_dir = self.output_dir / folder_name
+            final_output_dir.mkdir(parents=True, exist_ok=True)
+            print(f"Starting download from: {start_url}")
+            print(f"Output directory: {final_output_dir.absolute()}")
+            print(f"Max workers: {self.max_workers}")
+            print("-" * 50)
+        else:
+            final_output_dir = self.output_dir
+            print(f"Starting download from: {start_url}")
+            print(f"Output directory: {final_output_dir.absolute()}")
+            print(f"Max workers: {self.max_workers}")
+            print("-" * 50)
         
         # Get all files recursively
         files_to_download = self.get_all_files_recursive(start_url, target_folder)
@@ -396,7 +414,7 @@ class NginxDirectoryDownloader:
             future_to_file = {}
             
             for file_url, local_file_path in files_to_download:
-                local_path = self.output_dir / local_file_path
+                local_path = final_output_dir / local_file_path
                 future = executor.submit(self.download_file, file_url, local_path)
                 future_to_file[future] = (file_url, local_path)
             
